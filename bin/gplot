@@ -3,16 +3,18 @@
 import argparse
 import collections
 import fileinput
-import sys
 import re
+import shutil
+import subprocess
+import sys
 import tempfile
 
 def main():
     args = parseArgs()
     path, maybe_temp_file = getInputFilePath(args)
     names = parseInputSetAndColumnNames(path)
-    script = generateScript(args, path, names)
-    plot(args, script)
+    script_file = generateScript(args, path, names)
+    plot(args, script_file.name)
 
 def parseArgs():
     parser = argparse.ArgumentParser(description = 'Plot graphs with gnuplot')
@@ -20,24 +22,32 @@ def parseArgs():
                         help='Path of data file containing one or more data sets; default is stdin')
 
     group = parser.add_argument_group('Plot details')
-    group.add_argument('-x', metavar='COLUMN=LABEL', nargs=1,
-                        help='Set X axis data column and/or label')
-    group.add_argument('-y', metavar='COLUMN=LABEL', nargs=1, action='append',
-                        help='Add plot giving Y axis data column and/or label')
-    group.add_argument('-d', '--data-set', metavar='N', nargs=1, type=int, action='append',
-                        help='Add data set to plot; default is all')
+    group.add_argument('-x', metavar='COLUMN=LABEL', default='0',
+                       help='Set X axis data column and/or label')
+    group.add_argument('-y', metavar='COLUMN=LABEL',
+                       default=[], action='append',
+                       help='Add plot giving Y axis data column and/or label')
+    group.add_argument('-s', '--data-set', metavar='N',
+                       type=int, default=[], action='append',
+                       help='Add data set to plot; default is all')
 
     group = parser.add_argument_group('Output')
-    group.add_argument('-o', '--ouptput', metavar='PATH',
+    group.add_argument('-o', '--output', metavar='PATH',
                        help='Output filename; default is stdout')
     group.add_argument('-t', '--output-type', choices=['txt','svg'], default='txt',
                        help='Output type; default is text')
-    group.add_argument('-v', '--verbose',
+    group.add_argument('-ow', '--width',
+                       help="Output image width", default="1000")
+    group.add_argument('-oh', '--height',
+                       help="Output image height", default="500")
+
+    parser.add_argument('-v', '--verbose', action='store_true',
                        help='Print gnuplot script and command line used')
     return parser.parse_args()
 
 def getInputFilePath(args):
     if not args.input:
+        print(args)
         return pipeInputToTempFile()
 
     # Check the input path is readable.
@@ -50,6 +60,7 @@ def getInputFilePath(args):
     return args.input, None
 
 def pipeInputToTempFile():
+    print("here?")
     file = tempfile.NamedTemporaryFile(mode='w+')
     file.write(sys.stdin.read())
     file.flush()
@@ -59,10 +70,38 @@ def pipeInputToTempFile():
     return file.name, file
 
 def parseInputSetAndColumnNames(path):
-    pass
+    names = {}
+
+    with open(path, 'r') as f:
+        pass
+
+    return names
 
 def generateScript(args, path, names):
-    pass
+    dataSets =  args.data_set or [0]
+    xColumn = parseColumnSpec(args.x)
+    yColumns = list([parseColumnSpec(spec) for spec in args.y]) or [(1, None)]
+
+    # todo: look up column names in names
+    # label columns
+
+    script = Script()
+    script.terminal = getTerminalArgs(args)
+    script.output = args.output
+    for dataSet in dataSets:
+        for yColumn in yColumns:
+            element = PlotElement(path, dataSet, f"{xColumn[0]}:{yColumn[0]}")
+            script.plotElements.append(element)
+
+    file = tempfile.NamedTemporaryFile(mode='w+')
+    file.write(str(script))
+    file.flush()
+
+    if args.verbose:
+        file.seek(0)
+        print(file.read().rstrip())
+
+    return file
 
 def parseColumnSpec(spec):
     column = None
@@ -73,14 +112,85 @@ def parseColumnSpec(spec):
         if not re.match(r"^\d+$", column):
             sys.exit("Bad column number '%s' in spec '%s'" % (column, spec))
         column = int(colunn)
-    elif re.match(r"^\d+$", spec):
+    elif re.match(r"\d+$", spec):
         column = int(spec)
     else:
         label = spec
 
     return column, label
 
+def getTerminalArgs(args):
+    type = args.output_type
+    if type is None and args.output:
+        outputPath = os.path.normpath(args.output)
+        _, ext = os.path.splitext(outputPath)
+        if ext == '.svg':
+            type = 'svg'
+        elif ext == '.png':
+            type = 'png'
+        else:
+            sys.exit(f"Can't guess output type from file extension {ext}")
+
+    if type == 'txt':
+        columns = shutil.get_terminal_size().columns
+        rows = int(columns / 4)
+        return(f"dumb nofeed {columns} {rows}")
+    elif type == 'svg':
+        return(f"svg size {args.width}, {args.height}")
+    elif type == 'png':
+        return (f"png size {args.width}, {args.height}")
+
+    sys.exit("Unsupported output type")
+
+class Script:
+    setFields = ['terminal', 'output', 'title', 'xlabel', 'ylabel']
+
+    def __init__(self):
+        for name in self.setFields:
+            setattr(self, name, None)
+        self.plotElements = []
+
+    def __str__(self):
+        return ''.join(
+            [self.setCommand(name) for name in self.setFields] +
+            [self.plotCommand()])
+
+    def setCommand(self, name):
+        value = getattr(self, name)
+        if not value:
+            return ''
+        return f"set {name} '{value}'\n"
+
+    def plotCommand(self):
+        if not self.plotElements:
+            return ''
+        elements = [str(element) for element in self.plotElements]
+        return f"plot {', '.join(elements)}\n"
+
+class PlotElement:
+    def __init__(self, dataSource, index, usingColumns):
+        self.dataSource = dataSource
+        self.index = index
+        self.usingColumns = usingColumns
+        # todo: make things optinal?
+        # todo: linecolor
+
+    def __str__(self):
+        return f"'{self.dataSource}' index {self.index} using {self.usingColumns} with lines"
+
 def plot(args, script):
-    pass
+    cmd = ['gnuplot', script]
+    if args.verbose:
+        print(' '.join(cmd))
+
+    proc = subprocess.run(cmd, capture_output=True)
+    if proc.returncode != 0:
+        print("Error running gnuplot:")
+        print(proc.stderr.decode('ascii'))
+        sys.exit(proc.returncode)
+
+    output = proc.stdout.decode('ascii').strip()
+    if output:
+        print(output)
 
 main()
