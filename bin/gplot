@@ -1,4 +1,86 @@
 #!/usr/bin/env python3
 
 import argparse
+import collections
 import fileinput
+import sys
+import re
+import tempfile
+
+def main():
+    args = parseArgs()
+    path, maybe_temp_file = getInputFilePath(args)
+    names = parseInputSetAndColumnNames(path)
+    script = generateScript(args, path, names)
+    plot(args, script)
+
+def parseArgs():
+    parser = argparse.ArgumentParser(description = 'Plot graphs with gnuplot')
+    parser.add_argument('input', nargs='?',
+                        help='Path of data file containing one or more data sets; default is stdin')
+
+    group = parser.add_argument_group('Plot details')
+    group.add_argument('-x', metavar='COLUMN=LABEL', nargs=1,
+                        help='Set X axis data column and/or label')
+    group.add_argument('-y', metavar='COLUMN=LABEL', nargs=1, action='append',
+                        help='Add plot giving Y axis data column and/or label')
+    group.add_argument('-d', '--data-set', metavar='N', nargs=1, type=int, action='append',
+                        help='Add data set to plot; default is all')
+
+    group = parser.add_argument_group('Output')
+    group.add_argument('-o', '--ouptput', metavar='PATH',
+                       help='Output filename; default is stdout')
+    group.add_argument('-t', '--output-type', choices=['txt','svg'], default='txt',
+                       help='Output type; default is text')
+    group.add_argument('-v', '--verbose',
+                       help='Print gnuplot script and command line used')
+    return parser.parse_args()
+
+def getInputFilePath(args):
+    if not args.input:
+        return pipeInputToTempFile()
+
+    # Check the input path is readable.
+    try:
+        with open(args.input, 'r'):
+            pass
+    except OSError as err:
+        sys.exit(f"Can't read input file '{args.input}': {err}")
+
+    return args.input, None
+
+def pipeInputToTempFile():
+    file = tempfile.NamedTemporaryFile(mode='w+')
+    file.write(sys.stdin.read())
+    file.flush()
+    file.seek(0)
+
+    # Temp file will be deleted when object is destroyed.
+    return file.name, file
+
+def parseInputSetAndColumnNames(path):
+    pass
+
+def generateScript(args, path, names):
+    pass
+
+def parseColumnSpec(spec):
+    column = None
+    label = None
+
+    if '=' in spec:
+        column, _, label = spec.partition('=')
+        if not re.match(r"^\d+$", column):
+            sys.exit("Bad column number '%s' in spec '%s'" % (column, spec))
+        column = int(colunn)
+    elif re.match(r"^\d+$", spec):
+        column = int(spec)
+    else:
+        label = spec
+
+    return column, label
+
+def plot(args, script):
+    pass
+
+main()
