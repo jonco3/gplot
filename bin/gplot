@@ -3,6 +3,7 @@
 import argparse
 import collections
 import fileinput
+import os
 import re
 import shutil
 import subprocess
@@ -12,8 +13,10 @@ import tempfile
 def main():
     args = parseArgs()
     path, maybe_temp_file = getInputFilePath(args)
-    names = parseInputSetAndColumnNames(path)
-    script_file = generateScript(args, path, names)
+    metaData = parseInputMetaData(path)
+    if not metaData:
+        sys.exit("Couldn't find any data in input file")
+    script_file = generateScript(args, path, metaData)
     plot(args, script_file.name)
 
 def parseArgs():
@@ -22,11 +25,14 @@ def parseArgs():
                         help='Path of data file containing one or more data sets; default is stdin')
 
     group = parser.add_argument_group('Plot details')
-    group.add_argument('-x', metavar='COLUMN=LABEL', default='0',
+    group.add_argument('-x', metavar='COLUMN=LABEL', default='1',
                        help='Set X axis data column and/or label')
     group.add_argument('-y', metavar='COLUMN=LABEL',
                        default=[], action='append',
                        help='Add plot giving Y axis data column and/or label')
+    group.add_argument('-y2', metavar='COLUMN=LABEL',
+                       default=[], action='append',
+                       help='Add plot giving second Y axis data column and/or label')
     group.add_argument('-s', '--data-set', metavar='N',
                        type=int, default=[], action='append',
                        help='Add data set to plot; default is all')
@@ -34,7 +40,7 @@ def parseArgs():
     group = parser.add_argument_group('Output')
     group.add_argument('-o', '--output', metavar='PATH',
                        help='Output filename; default is stdout')
-    group.add_argument('-t', '--output-type', choices=['txt','svg'], default='txt',
+    group.add_argument('-f', '--output-format', choices=['txt','svg'],
                        help='Output type; default is text')
     group.add_argument('-ow', '--width',
                        help="Output image width", default="1000")
@@ -47,7 +53,6 @@ def parseArgs():
 
 def getInputFilePath(args):
     if not args.input:
-        print(args)
         return pipeInputToTempFile()
 
     # Check the input path is readable.
@@ -60,7 +65,6 @@ def getInputFilePath(args):
     return args.input, None
 
 def pipeInputToTempFile():
-    print("here?")
     file = tempfile.NamedTemporaryFile(mode='w+')
     file.write(sys.stdin.read())
     file.flush()
@@ -69,29 +73,83 @@ def pipeInputToTempFile():
     # Temp file will be deleted when object is destroyed.
     return file.name, file
 
-def parseInputSetAndColumnNames(path):
-    names = {}
+def parseInputMetaData(path):
+    # Parse set name and column names from first two comment lines at
+    # the start of each data set.
+
+    blankLineCount = 0
+    commentLineCount = 0
+    dataLineCount = 0
+    inDataSet = False
+    setMetaData = None
+
+    location = 'top' # 'top', 'header' or 'data'
+    setMetaDataList = []
 
     with open(path, 'r') as f:
-        pass
+        for line in f:
+            line = line.rstrip()
 
-    return names
+            isBlank = line == ""
+            if isBlank:
+                blankLineCount += 1
+            else:
+                blankLineCount = 0
 
-def generateScript(args, path, names):
-    dataSets =  args.data_set or [0]
+            if not isBlank and not inDataSet:
+                inDataSet = True
+                commentLineCount = 0
+                dataLineCount = 0
+                setMetaData = SetMetaData()
+            elif blankLineCount == 2:
+                inDataSet = False
+
+            isComment = line.startswith('#')
+            if isComment:
+                assert inDataSet
+                commentLineCount += 1
+                if commentLineCount == 1:
+                    setMetaData.name = line[1:].lstrip().split()[0]
+                elif commentLineCount == 2:
+                    setMetaData.columnNames = line[1:].split()
+
+            if not isBlank and not isComment:
+                dataLineCount += 1
+                if dataLineCount == 1:
+                    setMetaDataList.append(setMetaData)
+
+    return setMetaDataList
+
+class SetMetaData:
+    def __init__(self):
+        self.name = None
+        self.columnNames = None
+
+def generateScript(args, path, metaData):
+    dataSets =  dataSetsToPlot(args, metaData)
     xColumn = parseColumnSpec(args.x)
-    yColumns = list([parseColumnSpec(spec) for spec in args.y]) or [(1, None)]
+    yColumns = yColumnsToPlot(args, metaData)
+    y2Columns = y2ColumnsToPlot(args, metaData)
 
     # todo: look up column names in names
-    # label columns
 
-    script = Script()
-    script.terminal = getTerminalArgs(args)
+    script = Script(getTerminalArgs(args))
     script.output = args.output
     for dataSet in dataSets:
         for yColumn in yColumns:
-            element = PlotElement(path, dataSet, f"{xColumn[0]}:{yColumn[0]}")
-            script.plotElements.append(element)
+            plot = PlotElement(path)
+            plot.index = dataSet
+            plot.using = f"{xColumn[0]}:{yColumn[0]}"
+            plot.title = getPlotTitle(args, metaData, dataSet, yColumn)
+            plot.axes = 'x1y1'
+            script.plotElements.append(plot)
+        for yColumn in y2Columns:
+            plot = PlotElement(path)
+            plot.index = dataSet
+            plot.using = f"{xColumn[0]}:{yColumn[0]}"
+            plot.title = getPlotTitle(args, metaData, dataSet, yColumn)
+            plot.axes = 'x1y2'
+            script.plotElements.append(plot)
 
     file = tempfile.NamedTemporaryFile(mode='w+')
     file.write(str(script))
@@ -102,6 +160,27 @@ def generateScript(args, path, names):
         print(file.read().rstrip())
 
     return file
+
+def dataSetsToPlot(args, metaData):
+    if args.data_set:
+        return args.data_set
+
+    return list(range(len(metaData)))
+
+def yColumnsToPlot(args, metaData):
+    if args.y:
+        return list([parseColumnSpec(spec) for spec in args.y])
+
+    # Use columns from first data set for all sets.
+    columnNames = metaData[0].columnNames
+
+    return [(i, columnNames[i]) for i in range(2, len(columnNames))]
+
+def y2ColumnsToPlot(args, metaData):
+    if args.y2:
+        return list([parseColumnSpec(spec) for spec in args.y2])
+
+    return []
 
 def parseColumnSpec(spec):
     column = None
@@ -120,32 +199,52 @@ def parseColumnSpec(spec):
     return column, label
 
 def getTerminalArgs(args):
-    type = args.output_type
-    if type is None and args.output:
+    format = args.output_format
+    if format is None and args.output:
         outputPath = os.path.normpath(args.output)
         _, ext = os.path.splitext(outputPath)
         if ext == '.svg':
-            type = 'svg'
+            format = 'svg'
         elif ext == '.png':
-            type = 'png'
+            format = 'png'
         else:
-            sys.exit(f"Can't guess output type from file extension {ext}")
+            sys.exit(f"Can't guess output format from file extension {ext}")
 
-    if type == 'txt':
+    if format == 'txt':
         columns = shutil.get_terminal_size().columns
         rows = int(columns / 4)
         return(f"dumb nofeed {columns} {rows}")
-    elif type == 'svg':
+    elif format == 'svg':
         return(f"svg size {args.width}, {args.height}")
-    elif type == 'png':
+    elif format == 'png':
         return (f"png size {args.width}, {args.height}")
 
-    sys.exit("Unsupported output type")
+    sys.exit("Unsupported output format")
+
+def getPlotTitle(args, metaData, dataSet, yColumn):
+    setMetaData = metaData[dataSet]
+
+    setTitle = None
+    if setMetaData.name:
+        setTitle = setMetaData.name
+    elif args.input:
+        setTitle = os.path.basename(args.input)
+
+    columnTitle = None
+    if yColumn[1]:
+        columnTitle = yColumn[1]
+    elif setMetaData.columnNames and len(setMetaData.columnNames) >= yColumn[0]:
+        columnTitle = setMetaData.columnNames[yColumn[0] - 1]
+    else:
+        columnTitle = str(yColumn[0])
+
+    return ' '.join([setTitle, columnTitle])
 
 class Script:
-    setFields = ['terminal', 'output', 'title', 'xlabel', 'ylabel']
+    setFields = ['output', 'title', 'xlabel', 'ylabel']
 
-    def __init__(self):
+    def __init__(self, terminal):
+        self.terminal = terminal
         for name in self.setFields:
             setattr(self, name, None)
         self.plotElements = []
@@ -153,13 +252,16 @@ class Script:
     def __str__(self):
         return ''.join(
             [self.setCommand(name) for name in self.setFields] +
-            [self.plotCommand()])
+            [self.setCommand("terminal", False),
+             self.plotCommand()])
 
-    def setCommand(self, name):
+    def setCommand(self, name, quote=True):
         value = getattr(self, name)
-        if not value:
+        if value is None:
             return ''
-        return f"set {name} '{value}'\n"
+        if quote:
+            value = f"'{value}'"
+        return f"set {name} {value}\n"
 
     def plotCommand(self):
         if not self.plotElements:
@@ -168,15 +270,27 @@ class Script:
         return f"plot {', '.join(elements)}\n"
 
 class PlotElement:
-    def __init__(self, dataSource, index, usingColumns):
+    propertyNames = ['index', 'using', 'axes']
+
+    def __init__(self, dataSource):
         self.dataSource = dataSource
-        self.index = index
-        self.usingColumns = usingColumns
-        # todo: make things optinal?
+        self.title = None
+        for name in self.propertyNames:
+            setattr(self, name, None)
         # todo: linecolor
 
     def __str__(self):
-        return f"'{self.dataSource}' index {self.index} using {self.usingColumns} with lines"
+        propValues = [self.property(name) for name in self.propertyNames] + \
+            [self.property('title', True)]
+        return f"'{self.dataSource}'{''.join(propValues)} with lines"
+
+    def property(self, name, quote=False):
+        value = getattr(self, name)
+        if value is None:
+            return ''
+        if quote:
+            value = f"'{value}'"
+        return f" {name} {value}"
 
 def plot(args, script):
     cmd = ['gnuplot', script]
