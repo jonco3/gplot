@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+# Todo:
+#  - check gnuplot is installed
+#  - warn if no columns
+
 import argparse
 import collections
 import fileinput
@@ -40,7 +44,7 @@ def parseArgs():
     group = parser.add_argument_group('Output')
     group.add_argument('-o', '--output', metavar='PATH',
                        help='Output filename; default is stdout')
-    group.add_argument('-f', '--output-format', choices=['txt','svg'],
+    group.add_argument('-f', '--output-format', choices=['txt','svg'], default='txt',
                        help='Output type; default is text')
     group.add_argument('-ow', '--width',
                        help="Output image width", default="1000")
@@ -83,7 +87,6 @@ def parseInputMetaData(path):
     inDataSet = False
     setMetaData = None
 
-    location = 'top' # 'top', 'header' or 'data'
     setMetaDataList = []
 
     with open(path, 'r') as f:
@@ -123,7 +126,7 @@ def parseInputMetaData(path):
 class SetMetaData:
     def __init__(self):
         self.name = None
-        self.columnNames = None
+        self.columnNames = []
 
 def generateScript(args, path, metaData):
     dataSets =  dataSetsToPlot(args, metaData)
@@ -238,7 +241,12 @@ def getPlotTitle(args, metaData, dataSet, yColumn):
     else:
         columnTitle = str(yColumn[0])
 
-    return ' '.join([setTitle, columnTitle])
+    parts = []
+    if setTitle:
+        parts.append(setTitle)
+    if columnTitle:
+        parts.append(columnTitle)
+    return ' '.join(parts)
 
 class Script:
     setFields = ['output', 'title', 'xlabel', 'ylabel']
