@@ -193,7 +193,7 @@ def parseColumnSpec(spec):
         column, _, label = spec.partition('=')
         if not re.match(r"^\d+$", column):
             sys.exit("Bad column number '%s' in spec '%s'" % (column, spec))
-        column = int(colunn)
+        column = int(column)
     elif re.match(r"\d+$", spec):
         column = int(spec)
     else:
@@ -247,7 +247,7 @@ def getPlotTitle(args, metaData, dataSet, yColumn):
     elif len(setMetaData.columnNames) >= yColumn[0]:
         columnTitle = setMetaData.columnNames[yColumn[0] - 1]
     else:
-        columnTitle = str(yColumn[0])
+        columnTitle = f"Column {yColumn[0]}"
 
     parts = []
     if setTitle:
