@@ -44,7 +44,7 @@ def parseArgs():
     group = parser.add_argument_group('Output')
     group.add_argument('-o', '--output', metavar='PATH',
                        help='Output filename; default is stdout')
-    group.add_argument('-f', '--output-format', choices=['txt','svg'], default='txt',
+    group.add_argument('-f', '--output-format', choices=['txt','svg'],
                        help='Output type; default is text')
     group.add_argument('-ow', '--width',
                        help="Output image width", default="1000")
@@ -202,16 +202,7 @@ def parseColumnSpec(spec):
     return column, label
 
 def getTerminalArgs(args):
-    format = args.output_format
-    if format is None and args.output:
-        outputPath = os.path.normpath(args.output)
-        _, ext = os.path.splitext(outputPath)
-        if ext == '.svg':
-            format = 'svg'
-        elif ext == '.png':
-            format = 'png'
-        else:
-            sys.exit(f"Can't guess output format from file extension {ext}")
+    format = getOutputFormat(args);
 
     if format == 'txt':
         columns = shutil.get_terminal_size().columns
@@ -222,7 +213,24 @@ def getTerminalArgs(args):
     elif format == 'png':
         return (f"png size {args.width}, {args.height}")
 
-    sys.exit("Unsupported output format")
+    sys.exit(f"Unsupported output format: {format}")
+
+def getOutputFormat(args):
+    format = args.output_format
+    if format is not None:
+        return format
+
+    if not args.output:
+        return 'txt'
+
+    outputPath = os.path.normpath(args.output)
+    _, ext = os.path.splitext(outputPath)
+    if ext == '.svg':
+        return 'svg'
+    elif ext == '.png':
+        return 'png'
+
+    sys.exit(f"Can't guess output format from file extension {ext}")
 
 def getPlotTitle(args, metaData, dataSet, yColumn):
     setMetaData = metaData[dataSet]
@@ -236,7 +244,7 @@ def getPlotTitle(args, metaData, dataSet, yColumn):
     columnTitle = None
     if yColumn[1]:
         columnTitle = yColumn[1]
-    elif setMetaData.columnNames and len(setMetaData.columnNames) >= yColumn[0]:
+    elif len(setMetaData.columnNames) >= yColumn[0]:
         columnTitle = setMetaData.columnNames[yColumn[0] - 1]
     else:
         columnTitle = str(yColumn[0])
