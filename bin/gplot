@@ -17,9 +17,14 @@ import tempfile
 def main():
     args = parseArgs()
     path, maybe_temp_file = getInputFilePath(args)
+
     metaData = parseInputMetaData(path)
     if not metaData:
         sys.exit("Couldn't find any data in input file")
+    if args.list_metadata:
+        listMetaData(metaData)
+        sys.exit(0)
+
     script_file = generateScript(args, path, metaData)
     plot(args, script_file.name)
 
@@ -27,6 +32,9 @@ def parseArgs():
     parser = argparse.ArgumentParser(description = 'Plot graphs with gnuplot')
     parser.add_argument('input', nargs='?',
                         help='Path of data file containing one or more data sets; default is stdin')
+
+    parser.add_argument('-l', '--list-metadata', action='store_true',
+                        help='List input metadata such as sets and column names.')
 
     group = parser.add_argument_group('Plot details')
     group.add_argument('-x', metavar='COLUMN=LABEL', default='1',
@@ -115,10 +123,13 @@ def parseInputMetaData(path):
                     setMetaData.name = line[1:].lstrip().split()[0]
                 elif commentLineCount == 2:
                     setMetaData.columnNames = line[1:].split()
+                    setMetaData.columns = len(setMetaData.columnNames)
 
             if not isBlank and not isComment:
                 dataLineCount += 1
                 if dataLineCount == 1:
+                    if setMetaData.columns is None:
+                        setMetaData.columns = len(line.split())
                     setMetaDataList.append(setMetaData)
 
     return setMetaDataList
@@ -126,7 +137,20 @@ def parseInputMetaData(path):
 class SetMetaData:
     def __init__(self):
         self.name = None
+        self.columns = None
         self.columnNames = []
+
+def listMetaData(metaDataList):
+    print(f"Number of data sets: {len(metaDataList)}")
+    for i in range(len(metaDataList)):
+        md = metaDataList[i]
+        print(f"  Set {i + 1}:")
+        name = md.name or "(none)"
+        columnNames = md.columnNames or ["(none)"]
+        print(f"    Name: {name}")
+        print(f"    Columns: {md.columns}")
+        print(f"    Column names: {' '.join(columnNames)}")
+
 
 def generateScript(args, path, metaData):
     dataSets =  dataSetsToPlot(args, metaData)
