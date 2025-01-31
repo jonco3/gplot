@@ -37,7 +37,7 @@ def parseArgs():
                         help='List input metadata such as sets and column names.')
 
     group = parser.add_argument_group('Plot details')
-    group.add_argument('-x', metavar='COLUMN=LABEL', default='1',
+    group.add_argument('-x', metavar='COLUMN=LABEL', default='0',
                        help='Set X axis data column and/or label')
     group.add_argument('-y', metavar='COLUMN=LABEL',
                        default=[], action='append',
@@ -128,8 +128,11 @@ def parseInputMetaData(path):
             if not isBlank and not isComment:
                 dataLineCount += 1
                 if dataLineCount == 1:
-                    if setMetaData.columns is None:
-                        setMetaData.columns = len(line.split())
+                    if not setMetaData.columnNames:
+                        count = len(line.split())
+                        setMetaData.columnNames = [
+                            f"Column {i + 1}" for i in range(count)]
+                    setMetaData.columns = len(setMetaData.columnNames)
                     setMetaDataList.append(setMetaData)
 
     return setMetaDataList
@@ -139,6 +142,9 @@ class SetMetaData:
         self.name = None
         self.columns = None
         self.columnNames = []
+
+    def __repr__(self):
+        return f"SetMetaData({self.name}, {repr(self.columns)}, {repr(self.columnNames)})"
 
 def listMetaData(metaDataList):
     print(f"Number of data sets: {len(metaDataList)}")
@@ -154,9 +160,15 @@ def listMetaData(metaDataList):
 
 def generateScript(args, path, metaData):
     dataSets =  dataSetsToPlot(args, metaData)
-    xColumn = parseColumnSpec(args.x)
-    yColumns = yColumnsToPlot(args, metaData)
-    y2Columns = y2ColumnsToPlot(args, metaData)
+    xColumn = parseColumnSpec(args.x, metaData[0])
+    yColumns = yColumnsToPlot(args, metaData[0], xColumn[0])
+    y2Columns = y2ColumnsToPlot(args, metaData[0])
+
+    if args.verbose:
+        print(f"X column: {xColumn}")
+        print(f"Y columns: {yColumns}")
+        if y2Columns:
+            print(f"Y2 columns: {y2Columns}")
 
     # todo: look up column names in names
 
@@ -190,26 +202,29 @@ def generateScript(args, path, metaData):
 
 def dataSetsToPlot(args, metaData):
     if args.data_set:
+        for ds in args.data_set:
+            if ds >= len(metaData):
+                sys.exit(f"Data set index {ds} out of range")
         return args.data_set
 
     return list(range(len(metaData)))
 
-def yColumnsToPlot(args, metaData):
+def yColumnsToPlot(args, metaData, xColumn):
     if args.y:
-        return list([parseColumnSpec(spec) for spec in args.y])
+        return list([parseColumnSpec(spec, metaData) for spec in args.y])
 
-    # Use columns from first data set for all sets.
-    columnNames = metaData[0].columnNames
-
-    return [(i, columnNames[i]) for i in range(2, len(columnNames))]
+    # Default to the next column from the first data set for all sets.
+    yColumn = xColumn + 1
+    columnName = metaData[0].columnNames[yColumn - 1]
+    return [(yColumn, columnName)]
 
 def y2ColumnsToPlot(args, metaData):
     if args.y2:
-        return list([parseColumnSpec(spec) for spec in args.y2])
+        return list([parseColumnSpec(spec, metaData) for spec in args.y2])
 
     return []
 
-def parseColumnSpec(spec):
+def parseColumnSpec(spec, metaData):
     column = None
     label = None
 
@@ -218,10 +233,18 @@ def parseColumnSpec(spec):
         if not re.match(r"^\d+$", column):
             sys.exit("Bad column number '%s' in spec '%s'" % (column, spec))
         column = int(column)
+        if column > metaData.columns:
+            sys.exit("Column number %d out of range" % column)
     elif re.match(r"\d+$", spec):
         column = int(spec)
+        if column > metaData.columns:
+            sys.exit("Column number %d out of range" % column)
+        label = metaData.columnNames[column - 1]
     else:
         label = spec
+        if label not in metaData.columnNames:
+            sys.exit("Column '%s' not found" % label)
+        column = metaData.columnNames.index(label) + 1
 
     return column, label
 
@@ -322,7 +345,7 @@ class PlotElement:
     def __str__(self):
         propValues = [self.property(name) for name in self.propertyNames] + \
             [self.property('title', True)]
-        return f"'{self.dataSource}'{''.join(propValues)} with lines"
+        return f"'{self.dataSource}'{''.join(propValues)} with dots"
 
     def property(self, name, quote=False):
         value = getattr(self, name)
